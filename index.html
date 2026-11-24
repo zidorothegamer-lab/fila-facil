@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#084073">
+<title>Fila Fácil</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topo">
+    <p class="marca">Fila <span>Fácil</span></p>
+    <p class="loja" id="loja"></p>
+  </header>
+  <main>
+    <div id="avisos"></div>
+    <div id="conteudo"><div class="card vazio">Carregando a fila…</div></div>
+  </main>
+  <p class="rodape">Protótipo acadêmico · Menos filas. Mais tempo para você.</p>
+</div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script src="store.js"></script>
+<script>
+(function () {
+  "use strict";
+  var h = FF.h;
+  var CHAVE = "filafacil-senha-" + FilaStore.loja;
+  var store = null, lista = [], carregado = false;
+  var meuId = null;
+  // No modo de teste, cada aba é um cliente diferente (sessionStorage); com o Firebase, o celular lembra a senha (localStorage).
+  var porAba = false;
+  function lerSenha() { try { return (porAba ? sessionStorage : localStorage).getItem(CHAVE); } catch (e) { return null; } }
+  function gravarSenha(v) { try { var s = porAba ? sessionStorage : localStorage; if (v == null) s.removeItem(CHAVE); else s.setItem(CHAVE, v); } catch (e) { /* ignora */ } }
+  var vista = { chave: null, atualizar: null };
+  var conteudo = document.getElementById("conteudo");
+  var audio = null, wake = null, alertaTimer = null, alertas = 0, emVez = false;
+
+  document.getElementById("loja").textContent = FF.nomeLoja;
+
+  // ---------- som, vibração e tela ligada ----------
+  function prepararSom() {
+    try {
+      if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === "suspended") audio.resume();
+    } catch (e) { audio = null; }
+  }
+  document.addEventListener("pointerdown", prepararSom, { passive: true });
+  function bip(atraso, freq) {
+    if (!audio) return;
+    try {
+      var t = audio.currentTime + atraso, o = audio.createOscillator(), g = audio.createGain();
+      o.type = "sine"; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      o.connect(g); g.connect(audio.destination); o.start(t); o.stop(t + 0.4);
+    } catch (e) { /* sem som */ }
+  }
+  function alertar() {
+    try { if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 700]); } catch (e) { /* sem vibração */ }
+    bip(0, 880); bip(0.45, 1175); bip(0.9, 1568);
+  }
+  async function manterTelaLigada(ligar) {
+    try {
+      if (ligar && !wake && "wakeLock" in navigator && document.visibilityState === "visible") {
+        wake = await navigator.wakeLock.request("screen");
+        wake.addEventListener("release", function () { wake = null; });
+      } else if (!ligar && wake) { await wake.release(); wake = null; }
+    } catch (e) { wake = null; }
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && meuId) manterTelaLigada(true);
+  });
+  function iniciarAlertas() {
+    if (emVez) return;
+    emVez = true; alertas = 0; alertar();
+    alertaTimer = setInterval(function () {
+      alertas += 1;
+      if (alertas >= 4) { clearInterval(alertaTimer); alertaTimer = null; return; }
+      alertar();
+    }, 20000);
+  }
+  function pararAlertas() {
+    emVez = false;
+    if (alertaTimer) { clearInterval(alertaTimer); alertaTimer = null; }
+  }
+
+  // ---------- telas ----------
+  function anuncio() {
+    return h("div", { class: "anuncio" }, h("b", null, "Publicidade"), "Espaço reservado para anúncios (Google AdSense)");
+  }
+  function esperaParaNovo(a) {
+    if (!a.fila.length) return null;
+    var agora = Date.now();
+    var restante = Math.max(0, a.tma - (agora - a.fila[0].inicio));
+    return restante + (a.fila.length - 1) * a.tma;
+  }
+
+  function telaEntrar() {
+    var nPessoas = h("strong", null, "0"), nEspera = h("strong", null, "–");
+    var erro = h("p", { class: "erro-campo", "aria-live": "polite" });
+    var campo = h("input", { type: "text", id: "nome", maxlength: "30", autocomplete: "given-name", enterkeyhint: "go", placeholder: "Como devemos chamar você?" });
+    var botao = h("button", { class: "btn", type: "submit" }, "Entrar na fila");
+    var form = h("form", { novalidate: true, onsubmit: async function (ev) {
+      ev.preventDefault();
+      prepararSom();
+      var nome = campo.value.replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim();
+      if (!nome) { erro.textContent = "Digite seu nome para entrar na fila."; campo.focus(); return; }
+      erro.textContent = "";
+      botao.disabled = true; botao.textContent = "Entrando…";
+      try {
+        var id = await store.entrar(nome.slice(0, 30));
+        meuId = id; gravarSenha(id);
+        render();
+      } catch (e) {
+        console.error(e);
+        erro.textContent = "Não foi possível entrar na fila. Tente de novo.";
+        botao.disabled = false; botao.textContent = "Entrar na fila";
+      }
+    } },
+      h("label", { for: "nome" }, "Seu nome"),
+      campo,
+      h("p", { class: "sub", style: "font-size:13px" }, "Pedimos só o seu nome, para chamar você no caixa."),
+      erro, botao);
+    var el = h("div", { style: "display:flex;flex-direction:column;gap:14px" },
+      h("section", { class: "card" },
+        h("h1", null, "Entre na fila"),
+        h("p", { class: "sub" }, "Sem senha de papel. Você acompanha tudo por aqui."),
+        h("div", { class: "resumo-fila" },
+          h("div", { class: "mini" }, nPessoas, h("span", null, "pessoas na fila")),
+          h("div", { class: "mini" }, nEspera, h("span", null, "espera estimada"))),
+        form),
+      anuncio());
+    function atualizar(a) {
+      nPessoas.textContent = a.fila.length;
+      var w = esperaParaNovo(a);
+      nEspera.textContent = w == null ? "Sem espera" : "~" + FF.minutos(w) + " min";
+    }
+    return { el: el, atualizar: atualizar };
+  }
+
+  function telaEspera(eu) {
+    var nome = h("p", { class: "saudacao" });
+    var pos = h("p", { class: "posicao" });
+    var leg = h("p", { class: "posicao-legenda" });
+    var frente = h("strong"), estimativa = h("strong");
+    var pontos = h("div", { class: "pontos", "aria-hidden": "true" });
+    var dica = h("p", { class: "dica" });
+    var sair = h("button", { class: "btn claro", type: "button" }, "Sair da fila");
+    var confirmando = null;
+    sair.addEventListener("click", async function () {
+      if (!confirmando) {
+        sair.textContent = "Toque de novo para sair";
+        confirmando = setTimeout(function () { confirmando = null; sair.textContent = "Sair da fila"; }, 4000);
+        return;
+      }
+      clearTimeout(confirmando); confirmando = null;
+      sair.disabled = true;
+      try { await store.mudarStatus(meuId, "desistiu"); } catch (e) { console.error(e); sair.disabled = false; sair.textContent = "Sair da fila"; }
+    });
+    var el = h("div", { style: "display:flex;flex-direction:column;gap:14px" },
+      h("section", { class: "card espera", "aria-live": "polite" },
+        nome, pos, leg,
+        h("span", { class: "senha-tag" }, "Senha " + FF.senha(eu.senha)),
+        h("div", { class: "linhas" },
+          h("div", { class: "mini" }, frente, h("span", null, "na sua frente")),
+          h("div", { class: "mini" }, estimativa, h("span", null, "espera estimada"))),
+        pontos,
+        dica,
+        sair),
+      anuncio());
+    function atualizar(a, eu, p) {
+      nome.textContent = "Olá, " + eu.nome + "!";
+      pos.textContent = p + "º";
+      leg.textContent = p === 2 ? "Você é o próximo!" : "lugar na fila";
+      frente.textContent = (p - 1) + (p - 1 === 1 ? " pessoa" : " pessoas");
+      var restante = Math.max(0, a.tma - (Date.now() - a.fila[0].inicio)) + (p - 2) * a.tma;
+      estimativa.textContent = "~" + FF.minutos(restante) + " min";
+      pontos.replaceChildren();
+      var n = Math.min(a.fila.length, 14);
+      for (var i = 0; i < n; i++) pontos.appendChild(h("span", { class: "ponto" + (i === p - 1 ? " eu" : "") }));
+      var ativo = !navigator.userActivation || navigator.userActivation.hasBeenActive;
+      dica.textContent = ativo
+        ? "Pode guardar o celular, mas deixe esta página aberta. Quando chegar a sua vez, ele toca e vibra."
+        : "Toque em qualquer lugar desta tela para ativar o som e a vibração do aviso. Depois, deixe a página aberta.";
+      document.title = p + "º na fila · Fila Fácil";
+    }
+    return { el: el, atualizar: atualizar };
+  }
+
+  function telaVez(eu) {
+    var el = h("div", { style: "display:flex;flex-direction:column;gap:14px" },
+      h("section", { class: "card vez", role: "alert" },
+        h("div", { class: "sino", "aria-hidden": "true" }, "🔔"),
+        h("h1", null, "É a sua vez!"),
+        h("p", null, "Dirija-se ao caixa da " + FF.nomeLoja + "."),
+        h("span", { class: "senha-tag" }, "Senha " + FF.senha(eu.senha) + " · " + eu.nome)),
+      h("p", { class: "card sub", style: "margin:0;text-align:center" }, "Mostre esta tela ao atendente."));
+    return { el: el, atualizar: function () { document.title = "🔔 É a sua vez! · Fila Fácil"; } };
+  }
+
+  function telaFim(tipo) {
+    var t = {
+      atendido: ["✓", "", "Atendimento concluído", "Obrigado por usar o Fila Fácil. Bom apetite!"],
+      rejeitado: ["!", "neutro", "Sua senha foi encerrada pelo caixa", "Se foi engano, fale com o atendente."],
+      desistiu: ["↩", "neutro", "Você saiu da fila", "Quando quiser, é só entrar de novo."],
+      encerrada: ["↺", "neutro", "Esta fila foi reiniciada", "O estabelecimento encerrou a fila anterior."],
+    }[tipo];
+    var el = h("div", { style: "display:flex;flex-direction:column;gap:14px" },
+      h("section", { class: "card fim" },
+        h("div", { class: "icone " + t[1], "aria-hidden": "true" }, t[0]),
+        h("h1", null, t[2]),
+        h("p", { class: "sub" }, t[3]),
+        h("button", { class: "btn", type: "button", onclick: function () { meuId = null; gravarSenha(null); render(); } }, "Entrar na fila novamente")),
+      anuncio());
+    return { el: el, atualizar: function () { document.title = "Fila Fácil"; } };
+  }
+
+  // ---------- controle ----------
+  function render() {
+    if (!carregado) return;
+    var a = FF.analisar(lista, Date.now());
+    var eu = meuId ? a.todos.find(function (e) { return e.id === meuId; }) : null;
+    var chave, criar, args = [a];
+    if (!meuId) { chave = "entrar"; criar = telaEntrar; }
+    else if (!eu) { chave = "fim-encerrada"; criar = function () { return telaFim("encerrada"); }; }
+    else if (eu.status === "aguardando") {
+      var p = a.fila.indexOf(eu) + 1;
+      if (p === 1) { chave = "vez-" + eu.id; criar = function () { return telaVez(eu); }; }
+      else { chave = "espera-" + eu.id; criar = function () { return telaEspera(eu); }; args = [a, eu, p]; }
+    } else { chave = "fim-" + eu.status; criar = function () { return telaFim(eu.status); }; }
+
+    if (chave.indexOf("vez-") === 0) iniciarAlertas(); else pararAlertas();
+    manterTelaLigada(chave.indexOf("espera-") === 0 || chave.indexOf("vez-") === 0);
+
+    if (vista.chave !== chave) {
+      var v = criar();
+      vista = { chave: chave, atualizar: v.atualizar };
+      conteudo.replaceChildren(v.el);
+    }
+    vista.atualizar.apply(null, args);
+  }
+
+  FilaStore.abrir().then(function (s) {
+    store = s;
+    porAba = s.modo === "teste";
+    meuId = lerSenha();
+    FF.avisoModo(s);
+    s.assinar(function (l) { lista = l; carregado = true; render(); }, FF.avisoErro);
+    setInterval(render, 15000);
+  }).catch(function (e) {
+    FF.avisoErro(e);
+    conteudo.replaceChildren();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QR Code · Fila Fácil</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="qr-pagina">
+  <div style="width:min(560px,100%)">
+    <div id="avisos" style="margin-bottom:12px"></div>
+    <div class="display">
+      <div class="topo">
+        <p class="marca">Fila <span>Fácil</span></p>
+        <p class="slogan">Menos filas. Mais tempo para você.</p>
+      </div>
+      <div class="corpo">
+        <h1>Entre na fila <span>pelo celular</span></h1>
+        <p class="loja-nome" id="loja"></p>
+        <div class="qr-moldura" id="qr"></div>
+        <div class="passos">
+          <div class="passo"><b>1</b>Aponte a câmera para o QR Code</div>
+          <div class="passo"><b>2</b>Digite seu nome</div>
+          <div class="passo"><b>3</b>Aguarde o aviso da sua vez</div>
+        </div>
+      </div>
+      <div class="faixa">Sem aplicativo · Sem cadastro · Grátis</div>
+    </div>
+    <p class="qr-url" id="url"></p>
+    <div class="qr-acoes">
+      <button class="btn claro pequeno" type="button" id="copiar">Copiar link</button>
+      <button class="btn claro pequeno" type="button" id="baixar">Baixar imagem</button>
+      <button class="btn pequeno" type="button" id="imprimir">Imprimir</button>
+    </div>
+  </div>
+</div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script src="qr.js"></script>
+<script>
+(function () {
+  "use strict";
+  var link = new URL("index.html", location.href);
+  link.search = ""; link.hash = "";
+  var url = link.href.replace(/index\.html$/, "");
+  document.getElementById("loja").textContent = FF.nomeLoja;
+  document.getElementById("url").textContent = url;
+  if (location.protocol === "file:") FF.aviso("teste", "Este QR Code aponta para um arquivo do seu computador. Publique o site (passo 3 do LEIA-ME) e abra esta página pelo endereço publicado.");
+
+  document.getElementById("qr").innerHTML = window.qrSvg(url, { ec: "M", margin: 1, color: "#084073" });
+
+  document.getElementById("imprimir").addEventListener("click", function () { window.print(); });
+  var copiar = document.getElementById("copiar");
+  copiar.addEventListener("click", async function () {
+    try { await navigator.clipboard.writeText(url); copiar.textContent = "Link copiado"; }
+    catch (e) { copiar.textContent = "Não foi possível copiar"; }
+    setTimeout(function () { copiar.textContent = "Copiar link"; }, 2500);
+  });
+  document.getElementById("baixar").addEventListener("click", function () {
+    var m = window.qrMatrix(url, "M"), n = m.length, mod = 24, borda = 4, lado = (n + borda * 2) * mod;
+    var cv = document.createElement("canvas"); cv.width = cv.height = lado;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#fff"; g.fillRect(0, 0, lado, lado); g.fillStyle = "#000";
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) if (m[r][c]) g.fillRect((c + borda) * mod, (r + borda) * mod, mod, mod);
+    cv.toBlob(function (b) {
+      var u = URL.createObjectURL(b), a = document.createElement("a");
+      a.href = u; a.download = "qr-code-fila-facil.png"; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(u); }, 2000);
+    }, "image/png");
+  });
+})();
+</script>
+</body>
+</html>
